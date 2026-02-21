@@ -1,0 +1,106 @@
+version: "3.9"
+
+services:
+
+  # RabbitMQ — message broker replacing AWS SNS + SQS
+  # Management UI available at http://localhost:15672  (guest / guest)
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: eventstream-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # PostgreSQL
+  postgres:
+    image: postgres:15-alpine
+    container_name: eventstream-postgres
+    environment:
+      POSTGRES_DB: eventstream
+      POSTGRES_USER: eventstream
+      POSTGRES_PASSWORD: eventstream
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventstream"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Event Producer — REST API
+  event-producer:
+    build:
+      context: ./event-producer
+    container_name: eventstream-producer
+    ports:
+      - "8080:8080"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
+  # Event Processor — SQS-equivalent consumer
+  event-processor:
+    build:
+      context: ./event-processor
+    container_name: eventstream-processor
+    ports:
+      - "8081:8081"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: eventstream
+      DB_USERNAME: eventstream
+      DB_PASSWORD: eventstream
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  # Notification Service — downstream consumer
+  notification-service:
+    build:
+      context: ./notification-service
+    container_name: eventstream-notification
+    ports:
+      - "8082:8082"
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: eventstream
+      DB_USERNAME: eventstream
+      DB_PASSWORD: eventstream
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  postgres_data:
